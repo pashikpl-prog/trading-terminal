@@ -2437,6 +2437,7 @@
         }
         .chart-touch-hint.show { opacity: 1; }
 
+        /* ========== ИСПРАВЛЕННЫЙ ПОЛНОЭКРАННЫЙ РЕЖИМ ========== */
         .price-chart-section.is-fullscreen {
             position: fixed !important;
             top: 0 !important;
@@ -2450,50 +2451,43 @@
             margin: 0 !important;
             border-radius: 0 !important;
             border-left: none !important;
-            padding: 10px !important;
-            padding-top: max(10px, env(safe-area-inset-top, 10px)) !important;
-            padding-bottom: max(10px, env(safe-area-inset-bottom, 10px)) !important;
+            padding: 0 !important;
             background: #fff !important;
             overflow: hidden !important;
-            display: flex !important;
-            flex-direction: column !important;
+            display: block !important;
             box-shadow: none !important;
             transform: none !important;
         }
 
+        /* Скрываем всё, кроме графика, в полноэкранном режиме */
+        .price-chart-section.is-fullscreen > *:not(.price-chart-wrapper) {
+            display: none !important;
+        }
+
         .price-chart-section.is-fullscreen .price-chart-wrapper {
-            flex: 1 1 auto !important;
-            height: auto !important;
-            min-height: 0 !important;
-            max-height: none !important;
+            position: absolute !important;
+            top: 0 !important;
+            left: 0 !important;
+            right: 0 !important;
+            bottom: 0 !important;
+            width: 100% !important;
+            height: 100% !important;
             border-radius: 0 !important;
+            border: none !important;
+            box-shadow: none !important;
+            margin: 0 !important;
         }
 
-        .price-chart-section.is-fullscreen h3 {
-            font-size: 14px !important;
-            margin-bottom: 6px !important;
-            flex-shrink: 0 !important;
+        /* Кнопки управления графиком остаются видимыми */
+        .price-chart-section.is-fullscreen .chart-zoom-controls {
+            position: fixed !important;
+            top: 10px !important;
+            right: 10px !important;
+            z-index: 100000 !important;
         }
 
-        .price-chart-section.is-fullscreen .compact-chart-controls {
-            padding: 6px !important;
-            margin-bottom: 6px !important;
-            gap: 6px !important;
-            flex-shrink: 0 !important;
-            max-height: 25vh;
-            overflow-y: auto;
-            -webkit-overflow-scrolling: touch;
-        }
-
-        .price-chart-section.is-fullscreen .date-controls-panel {
-            padding: 6px !important;
-            margin-top: 6px !important;
-            gap: 6px !important;
-            flex-shrink: 0 !important;
-        }
-
-        .price-chart-section.is-fullscreen .active-patterns-count,
-        .price-chart-section.is-fullscreen .additional-patterns-control {
+        /* Скрываем кнопку "свернуть" на самом графике, так как есть отдельная кнопка закрытия */
+        .price-chart-section.is-fullscreen .zoom-btn.fullscreen {
             display: none !important;
         }
 
@@ -4345,10 +4339,10 @@
         let connectionErrorMessageId = null;
 
         // ========== ПЕРЕМЕННЫЕ ЦЕНОВЫХ АЛЕРТОВ ==========
-        let priceAlerts = []; // Массив объектов { id, figi, ticker, price, direction, repeat, triggered, createdAt, lastPrice }
-        let alertModeActive = false; // Режим установки алерта
-        let editingAlertId = null; // ID редактируемого алерта
-        let priceAlertIdCounter = Date.now(); // Счётчик ID
+        let priceAlerts = [];
+        let alertModeActive = false;
+        let editingAlertId = null;
+        let priceAlertIdCounter = Date.now();
 
         let autoTradeConfig = {
             enabled: false,
@@ -4413,6 +4407,9 @@
         };
 
         let autoTradePatternState = new Map();
+
+        // ✅ Флаг: пользователь находится у правого края графика (для автосдвига при новых свечах)
+        let wasAtRightEdgeBeforeUpdate = true;
 
         // ========== TOUCH-ЖЕСТЫ ГРАФИКА ==========
         let touchState = {
@@ -7534,13 +7531,6 @@
         }
 
         // ========== ЦЕНОВЫЕ АЛЕРТЫ (пользовательские) ==========
-        // Логика:
-        //   direction === 'above' — алерт срабатывает, когда цена ПОДНИМАЕТСЯ ВЫШЕ уровня (была ниже → стала выше)
-        //   direction === 'below' — алерт срабатывает, когда цена ОПУСКАЕТСЯ НИЖЕ уровня (была выше → стала ниже)
-        // Направление определяется в момент СОХРАНЕНИЯ алерта относительно текущей цены.
-        // Если при следующей проверке направление изменилось (например, цена уже ушла за уровень),
-        // направление ПЕРЕСЧИТЫВАЕТСЯ динамически в checkPriceAlerts.
-
         function savePriceAlertsToStorage() {
             try {
                 localStorage.setItem('priceAlerts', JSON.stringify(priceAlerts));
@@ -7634,8 +7624,6 @@
             const repeatCheckbox = document.getElementById('alertRepeatCheckbox');
 
             if (!overlay || !priceInput) return;
-
-            const currentPrice = parseFloat(document.getElementById('currentPrice')?.textContent.replace(',', '.')) || 0;
 
             if (editingId) {
                 const alert = priceAlerts.find(a => a.id === editingId);
@@ -7733,8 +7721,6 @@
             }
 
             const currentPrice = parseFloat(document.getElementById('currentPrice')?.textContent.replace(',', '.')) || 0;
-            // Определяем направление: если цена алерта выше текущей — ждём роста (above),
-            // если ниже — ждём падения (below).
             const direction = price > currentPrice ? 'above' : (price < currentPrice ? 'below' : 'above');
 
             if (editingAlertId) {
@@ -7745,7 +7731,6 @@
                     alert.repeat = !!repeatCheckbox?.checked;
                     alert.triggered = false;
                     alert.triggeredAt = null;
-                    // Сбрасываем lastPrice, чтобы при следующей проверке не было ложного срабатывания
                     alert.lastPrice = null;
                     addDebugMessage(`✅ Алерт #${alert.id} обновлён: ${price.toFixed(3)} (${direction === 'above' ? 'ждём роста' : 'ждём падения'})`, 'success');
                     showNotification(`✅ Алерт обновлён: ${price.toFixed(3)}`, 'success');
@@ -7972,14 +7957,6 @@
             showNotification(`🎯 Алерт сработал: ${tickerText} @ ${alert.price.toFixed(3)}`, 'success');
         }
 
-        // Проверка алертов — вызывается при каждом обновлении цены.
-        // Логика: сравниваем lastPrice и currentPrice, чтобы поймать именно пересечение уровня.
-        //   alert.direction === 'above' → сработал, если lastPrice < alert.price && currentPrice >= alert.price
-        //   alert.direction === 'below' → сработал, если lastPrice > alert.price && currentPrice <= alert.price
-        // Если lastPrice неизвестен (первый вызов), используем упрощённую проверку.
-        // Дополнительно: если направление в alert.direction не соответствует текущему положению цены
-        // (например, пользователь вручную изменил цену так, что алерт оказался "не с той стороны"),
-        // пересчитываем direction относительно текущей цены.
         function checkPriceAlerts(currentPrice) {
             if (!selectedFutures || isNaN(currentPrice) || currentPrice <= 0) return;
             const figi = selectedFutures.figi || selectedFutures.symbol;
@@ -7991,12 +7968,7 @@
             relevantAlerts.forEach(alert => {
                 if (alert.triggered && !alert.repeat) return;
 
-                // Пересчитываем направление динамически, если цена уже "ушла" за уровень.
-                // Это исправляет случай, когда алерт создан "не с той стороны" или цена сильно ушла.
-                // Но не трогаем direction, если алерт уже сработал (для истории).
                 if (!alert.triggered) {
-                    // Если цена алерта выше текущей — ждём роста (above).
-                    // Если цена алерта ниже текущей — ждём падения (below).
                     const expectedDirection = alert.price > currentPrice ? 'above' : (alert.price < currentPrice ? 'below' : alert.direction);
                     if (expectedDirection !== alert.direction) {
                         addDebugMessage(`🔄 Алерт #${alert.id}: направление пересчитано ${alert.direction} → ${expectedDirection} (цена ${currentPrice.toFixed(3)}, алерт ${alert.price.toFixed(3)})`, 'info');
@@ -8009,19 +7981,15 @@
 
                 if (lastPrice !== null && lastPrice !== undefined && lastPrice > 0) {
                     if (alert.direction === 'above') {
-                        // Ждём роста: была ниже/равна уровню, стала выше
                         triggered = lastPrice < alert.price && currentPrice >= alert.price;
                     } else if (alert.direction === 'below') {
-                        // Ждём падения: была выше/равна уровню, стала ниже
                         triggered = lastPrice > alert.price && currentPrice <= alert.price;
                     }
                 } else {
-                    // Первая проверка — срабатываем, если цена уже за уровнем в нужную сторону
                     if (alert.direction === 'above') triggered = currentPrice >= alert.price;
                     else if (alert.direction === 'below') triggered = currentPrice <= alert.price;
                 }
 
-                // Обновляем lastPrice всегда, чтобы следующая проверка корректно ловила пересечение
                 alert.lastPrice = currentPrice;
 
                 if (triggered) {
@@ -8038,7 +8006,6 @@
                 updateAlertsListUI();
                 updateActiveAlertsBadge();
             } else {
-                // Сохраняем обновлённые lastPrice / direction
                 savePriceAlertsToStorage();
             }
         }
@@ -11010,6 +10977,13 @@
                 addDebugMessage(`⚠️ Нет свечей для подготовки данных графика`, 'warning');
                 return;
             }
+
+            // ✅ Сохраняем СТАРУЮ длину ДО пересоздания chartData
+            const previousChartLength = chartData.length;
+            // ✅ Определяем: был ли пользователь у правого края ДО обновления
+            const wasAtRightEdge = previousChartLength === 0 
+                || currentEndIndex >= previousChartLength - 1;
+
             chartData = allCandles.map((c, i) => {
                 const time = new Date(c.time);
                 return {
@@ -11030,28 +11004,60 @@
             const startSlider = document.getElementById('startDateSlider');
             const endSlider = document.getElementById('endDateSlider');
 
-            if (preserveZoomOnNextUpdate && chartData.length > 0 && startSlider && endSlider) {
+            if (chartData.length === 0) {
+                currentStartIndex = 0;
+                currentEndIndex = 0;
+                updateDateDisplay();
+                return;
+            }
+
+            if (preserveZoomOnNextUpdate && previousChartLength > 0) {
+                // Ручное сохранение зума — например, при смене вкладки
                 if (currentStartIndex < 0) currentStartIndex = 0;
                 if (currentEndIndex >= chartData.length) currentEndIndex = chartData.length - 1;
                 if (currentStartIndex > currentEndIndex) currentStartIndex = currentEndIndex;
-
-                startSlider.max = chartData.length - 1;
-                endSlider.max = chartData.length - 1;
-                startSlider.min = 0;
-                endSlider.min = 0;
-                startSlider.value = currentStartIndex;
-                endSlider.value = currentEndIndex;
-                addDebugMessage(`🔍 Зум сохранён: ${currentStartIndex}–${currentEndIndex} из ${chartData.length}`, 'info');
-            } else if (startSlider && endSlider && chartData.length > 0) {
+                addDebugMessage(`🔍 Зум сохранён вручную: ${currentStartIndex}–${currentEndIndex} из ${chartData.length}`, 'info');
+            } else if (wasAtRightEdge && previousChartLength > 0) {
+                // ✅ АВТОСДВИГ: были у правого края — сдвигаем окно вправо на столько же,
+                // насколько выросла длина данных
+                const previousWindowSize = currentEndIndex - currentStartIndex;
+                const appendedCount = chartData.length - previousChartLength;
+                if (appendedCount > 0) {
+                    // Новый правый край — самый конец данных
+                    currentEndIndex = chartData.length - 1;
+                    // Левый край сдвигаем на то же количество, сохраняя ширину окна
+                    currentStartIndex = Math.max(0, currentEndIndex - previousWindowSize);
+                    addDebugMessage(`📈 Автосдвиг графика: +${appendedCount} свечей, окно теперь ${currentStartIndex}–${currentEndIndex} из ${chartData.length}`, 'info');
+                } else {
+                    // Данных не прибавилось (обновились существующие) — просто держим окно у правого края
+                    currentEndIndex = chartData.length - 1;
+                    currentStartIndex = Math.max(0, currentEndIndex - previousWindowSize);
+                }
+            } else if (previousChartLength > 0) {
+                // Пользователь не у правого края — сохраняем его позицию
+                if (currentStartIndex < 0) currentStartIndex = 0;
+                if (currentEndIndex >= chartData.length) currentEndIndex = chartData.length - 1;
+                if (currentStartIndex > currentEndIndex) currentStartIndex = currentEndIndex;
+                addDebugMessage(`🔒 Позиция сохранена: ${currentStartIndex}–${currentEndIndex} из ${chartData.length}`, 'info');
+            } else {
+                // Первая загрузка — показываем всё
                 currentStartIndex = 0;
                 currentEndIndex = chartData.length - 1;
-                startSlider.max = chartData.length - 1;
-                endSlider.max = chartData.length - 1;
+            }
+
+            // Обновляем границы слайдеров (max = chartData.length - 1)
+            if (startSlider && endSlider) {
                 startSlider.min = 0;
                 endSlider.min = 0;
+                startSlider.max = Math.max(0, chartData.length - 1);
+                endSlider.max = Math.max(0, chartData.length - 1);
                 startSlider.value = currentStartIndex;
                 endSlider.value = currentEndIndex;
             }
+
+            // ✅ Сбрасываем флаг — автосдвиг отработал
+            preserveZoomOnNextUpdate = false;
+
             updateDateDisplay();
             addDebugMessage(`📊 Подготовлено ${chartData.length} точек для свечного графика`, 'info');
         }
@@ -12446,7 +12452,7 @@ async function connectToAPI() {
                 }
                 preserveZoomOnNextUpdate = false;
             } else {
-                preserveZoomOnNextUpdate = true;
+                preserveZoomOnNextUpdate = false;
             }
             const oldCandles = [...allCandles];
             const wasFirstLoadForFutures = !futuresInitialized.has(selectedFutures?.figi || selectedFutures?.symbol);
